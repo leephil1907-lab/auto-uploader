@@ -7,6 +7,7 @@ import multer from 'multer';
 import pg from 'pg';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -252,10 +253,10 @@ async function getAccessToken(account){
  return decrypt(account.access_token_enc);
 }
 async function publishYoutube(job,post,media,account,token){
- const file=await fs.readFile(media.storage_path),init=await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json; charset=UTF-8','x-upload-content-length':String(file.length),'x-upload-content-type':media.mime_type},body:JSON.stringify({snippet:{title:(post.caption||media.filename).slice(0,100),description:post.caption,categoryId:'22'},status:{privacyStatus:'private'}})});
+ const fileStat=await fs.stat(media.storage_path),init=await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json; charset=UTF-8','x-upload-content-length':String(fileStat.size),'x-upload-content-type':media.mime_type},body:JSON.stringify({snippet:{title:(post.caption||media.filename).slice(0,100),description:post.caption,categoryId:'22'},status:{privacyStatus:'private'}})});
  if(!init.ok)throw new Error('YouTube upload initialization failed: '+(await init.text()).slice(0,400));
  const location=init.headers.get('location');if(!location)throw new Error('YouTube did not return a resumable upload URL');
- const done=await fetch(location,{method:'PUT',headers:{'content-length':String(file.length),'content-type':media.mime_type},body:file});
+ const done=await fetch(location,{method:'PUT',headers:{'content-length':String(fileStat.size),'content-type':media.mime_type},body:createReadStream(media.storage_path),duplex:'half'});
  const data=await done.json();if(!done.ok)throw new Error(data.error?.message||'YouTube video upload failed');return data.id;
 }
 async function publishTikTok(job,post,media,account,token){
@@ -338,8 +339,8 @@ app.get('*',(req,res,next)=>{if(req.path.startsWith('/api/')||req.path.startsWit
 app.use((err,req,res,next)=>{console.error(err);if(res.headersSent)return next(err);res.status(500).json({error:process.env.NODE_ENV==='production'?'Something went wrong. Check server logs for details.':String(err.message||err)})});
 
 async function start(){
+ if(process.env.NODE_ENV==='production'&&(!process.env.DATABASE_URL||!APP_URL.startsWith('https://')||!TOKEN_KEY))throw new Error('Set DATABASE_URL, HTTPS APP_URL and TOKEN_ENCRYPTION_KEY before deployment');
  await fs.mkdir(MEDIA_DIR,{recursive:true});
- await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
  await pool.query(schema);
  await pool.query("UPDATE publish_jobs SET status='failed',last_error='Worker stopped before confirming the result. Check the social account before retrying.',locked_at=NULL WHERE status='processing'");
  const server=app.listen(PORT,'0.0.0.0',()=>console.log(`Orbit API listening on ${PORT}`));
