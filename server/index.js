@@ -262,7 +262,12 @@ async function publishYoutube(job,post,media,account,token){
  const done=await fetch(location,{method:'PUT',headers:{'content-length':String(fileStat.size),'content-type':media.mime_type},body:createReadStream(media.storage_path),duplex:'half'});
  const data=await done.json();if(!done.ok)throw new Error(data.error?.message||'YouTube video upload failed');return data.id;
 }
+async function waitForTikTok(publishId,token){
+ for(let i=0;i<24;i++){await sleep(5000);const status=await fetch('https://open.tiktokapis.com/v2/post/publish/status/fetch/',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify({publish_id:publishId})}).then(x=>x.json());if(status.error?.code&&status.error.code!=='ok')throw new Error(status.error.message||'TikTok status check failed');const state=status.data?.status;if(state==='PUBLISH_COMPLETE')return publishId;if(state==='FAILED')throw new Error(status.data?.fail_reason||'TikTok could not complete the post');}
+ throw new Error('TikTok is still processing this post. Check the TikTok publishing status before retrying.');
+}
 async function publishTikTok(job,post,media,account,token){
+ if(job.remote_id)return waitForTikTok(job.remote_id,token);
  const info=await fetch('https://open.tiktokapis.com/v2/post/publish/creator_info/query/',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'}});
  const creator=await info.json();if(!info.ok||creator.error?.code!=='ok')throw new Error(creator.error?.message||'Could not retrieve TikTok creator settings');
  const privacy=post.tiktok_privacy||'SELF_ONLY';if(!creator.data?.privacy_level_options?.includes(privacy))throw new Error('The selected TikTok privacy option is unavailable for this account. Choose another option.');
@@ -271,8 +276,8 @@ async function publishTikTok(job,post,media,account,token){
  const started=await init.json();if(!init.ok||started.error?.code!=='ok')throw new Error(started.error?.message||'TikTok publish initialization failed');
  const handle=await fs.open(media.storage_path,'r');try{for(let i=0;i<count;i++){const length=Math.min(chunk,size-i*chunk),buffer=Buffer.alloc(length);await handle.read(buffer,0,length,i*chunk);const end=i*chunk+length-1;const put=await fetch(started.data.upload_url,{method:'PUT',headers:{'content-type':media.mime_type,'content-length':String(length),'content-range':`bytes ${i*chunk}-${end}/${size}`},body:buffer});if(!put.ok)throw new Error('TikTok video transfer failed at chunk '+(i+1));}}finally{await handle.close()}
  const publishId=started.data.publish_id;
- for(let i=0;i<24;i++){await sleep(5000);const status=await fetch('https://open.tiktokapis.com/v2/post/publish/status/fetch/',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify({publish_id:publishId})}).then(x=>x.json());if(status.error?.code&&status.error.code!=='ok')throw new Error(status.error.message||'TikTok status check failed');const state=status.data?.status;if(state==='PUBLISH_COMPLETE')return publishId;if(state==='FAILED')throw new Error(status.data?.fail_reason||'TikTok could not complete the post');}
- throw new Error('TikTok is still processing this post. Check the TikTok publishing status before retrying.');
+ await pool.query('UPDATE publish_jobs SET remote_id=$1 WHERE id=$2',[publishId,job.id]);
+ return waitForTikTok(publishId,token);
 }
 async function publishInstagram(job,post,media,account,token){
  const igId=account.metadata.instagramUserId||account.provider_user_id,url=publicMediaUrl(media.id,media.public_token);
