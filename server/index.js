@@ -314,7 +314,7 @@ async function workerLoop(){
   try{
    const claim=await pool.query(`WITH picked AS (
     SELECT id FROM publish_jobs WHERE status='queued' AND run_at<=now()
-    ORDER BY run_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1
+    ORDER BY run_at,created_at LIMIT 1 FOR UPDATE SKIP LOCKED
    ) UPDATE publish_jobs j SET status='processing',attempts=attempts+1,locked_at=now()
    FROM picked WHERE j.id=picked.id RETURNING j.id,j.post_id,j.user_id,j.attempts,j.max_attempts`);
    if(!claim.rowCount){await sleep(1800);continue;}
