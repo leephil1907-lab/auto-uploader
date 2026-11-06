@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS posts (
  status text NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','scheduled','publishing','published','partial','failed')),
  scheduled_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS public_token_enc text;
 CREATE TABLE IF NOT EXISTS publish_jobs (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  post_id uuid NOT NULL REFERENCES posts(id) ON DELETE CASCADE, account_id uuid NOT NULL REFERENCES social_accounts(id) ON DELETE CASCADE,
@@ -200,7 +201,7 @@ app.delete('/api/accounts/:id',auth,async(req,res,next)=>{try{const r=await pool
 app.post('/api/media',auth,(req,res,next)=>upload.single('video')(req,res,async(err)=>{try{
  if(err){if(err.code==='LIMIT_FILE_SIZE')return res.status(413).json({error:'Video exceeds the configured upload size'});return res.status(400).json({error:err.message||'Video upload failed'});}
  if(!req.file)return res.status(400).json({error:'Choose an MP4, MOV or WebM video'});
- const token=randomToken(24),r=await pool.query('INSERT INTO media_assets(user_id,filename,mime_type,size_bytes,storage_path,public_token_hash) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,filename,mime_type,size_bytes,created_at',[req.user.id,req.file.originalname,req.file.mimetype,req.file.size,req.file.path,hash(token)]);
+ const token=randomToken(24),r=await pool.query('INSERT INTO media_assets(user_id,filename,mime_type,size_bytes,storage_path,public_token_hash,public_token_enc) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,filename,mime_type,size_bytes,created_at',[req.user.id,req.file.originalname,req.file.mimetype,req.file.size,req.file.path,hash(token),encrypt(token)]);
  res.status(201).json({media:{...r.rows[0],publicUrl:publicMediaUrl(r.rows[0].id,token)}})
  }catch(e){next(e)}}));
 app.get('/public/media/:id',async(req,res,next)=>{try{
@@ -293,4 +294,54 @@ async function executeJob(job){
  if(row.platform==='facebook')return publishFacebook(row,row,{...row,id:row.media_id,public_token:await getMediaPublicToken(row.media_id)},account,token);
  throw new Error('No publisher is available for '+row.platform);
 }
-async function getMediaPublicToken(id){const r=await pool.query('SELECT public_token_hash FROM media_assets WHERE id=$1',[id]);return r.rows[0]?.public_token_hash?null:null}
+async function getMediaPublicToken(id){const r=await pool.query('SELECT public_token_enc FROM media_assets WHERE id=$1',[id]);if(!r.rowCount||!r.rows[0].public_token_enc)throw new Error('Media access URL is unavailable');return decrypt(r.rows[0].public_token_enc)}
+
+async function refreshPostStatus(postId){
+ const r=await pool.query("SELECT count(*)::int AS total,count(*) FILTER(WHERE status='published')::int AS published,count(*) FILTER(WHERE status='failed')::int AS failed,count(*) FILTER(WHERE status IN ('queued','processing'))::int AS pending FROM publish_jobs WHERE post_id=$1",[postId]);
+ const x=r.rows[0];let status='publishing';if(x.pending===0){status=x.published===x.total?'published':x.published>0?'partial':'failed';}
+ await pool.query('UPDATE posts SET status=$1,updated_at=now() WHERE id=$2',[status,postId]);
+}
+async function workerLoop(){
+ while(true){
+  let job=null;
+  try{
+   const claim=await pool.query(`WITH picked AS (
+    SELECT id FROM publish_jobs WHERE status='queued' AND run_at<=now()
+    ORDER BY run_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1
+   ) UPDATE publish_jobs j SET status='processing',attempts=attempts+1,locked_at=now()
+   FROM picked WHERE j.id=picked.id RETURNING j.id,j.post_id,j.user_id,j.attempts,j.max_attempts`);
+   if(!claim.rowCount){await sleep(1800);continue;}
+   job=claim.rows[0];
+   try{
+    const remoteId=await executeJob(job);
+    await pool.query("UPDATE publish_jobs SET status='published',remote_id=$1,last_error=NULL,locked_at=NULL WHERE id=$2",[String(remoteId||''),job.id]);
+    await event(job.user_id,'post_published',{jobId:job.id,remoteId},job.post_id);
+    await refreshPostStatus(job.post_id);
+   }catch(error){
+    const message=String(error?.message||error).slice(0,1800);
+    if(job.attempts<job.max_attempts){
+     const delay=Math.min(60*60,30*Math.pow(2,job.attempts-1));
+     await pool.query("UPDATE publish_jobs SET status='queued',run_at=now()+($1::text||' seconds')::interval,last_error=$2,locked_at=NULL WHERE id=$3",[delay,message,job.id]);
+    }else{
+     await pool.query("UPDATE publish_jobs SET status='failed',last_error=$1,locked_at=NULL WHERE id=$2",[message,job.id]);
+     await event(job.user_id,'post_failed',{jobId:job.id,error:message},job.post_id);
+     await refreshPostStatus(job.post_id);
+    }
+   }
+  }catch(error){console.error('Publisher worker error:',error);await sleep(2500);}
+ }
+}
+app.use(express.static(path.join(__dirname,'..','dist'),{index:false,fallthrough:true}));
+app.get('*',(req,res,next)=>{if(req.path.startsWith('/api/')||req.path.startsWith('/public/'))return next();res.sendFile(path.join(__dirname,'..','dist','index.html'),err=>{if(err)next(err)})});
+app.use((err,req,res,next)=>{console.error(err);if(res.headersSent)return next(err);res.status(500).json({error:process.env.NODE_ENV==='production'?'Something went wrong. Check server logs for details.':String(err.message||err)})});
+
+async function start(){
+ await fs.mkdir(MEDIA_DIR,{recursive:true});
+ await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
+ await pool.query(schema);
+ const server=app.listen(PORT,'0.0.0.0',()=>console.log(`Orbit API listening on ${PORT}`));
+ workerLoop().catch(e=>console.error('Worker stopped unexpectedly:',e));
+ const shutdown=()=>{server.close(()=>pool.end().finally(()=>process.exit(0)));setTimeout(()=>process.exit(1),10000).unref()};
+ process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
+}
+start().catch(error=>{console.error('Startup failed:',error);process.exit(1)});
