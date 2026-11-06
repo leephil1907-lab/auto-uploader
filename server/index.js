@@ -348,6 +348,9 @@ async function start(){
  await fs.mkdir(MEDIA_DIR,{recursive:true});
  await pool.query(schema);
  await pool.query("UPDATE publish_jobs SET status='failed',last_error='Worker stopped before confirming the result. Check the social account before retrying.',locked_at=NULL WHERE status='processing'");
+ await pool.query(`UPDATE posts p SET status=CASE WHEN x.pending>0 AND x.next_run>now() THEN 'scheduled' WHEN x.pending>0 THEN 'publishing' WHEN x.published=x.total THEN 'published' WHEN x.published>0 THEN 'partial' ELSE 'failed' END,updated_at=now()
+ FROM (SELECT post_id,count(*)::int AS total,count(*) FILTER(WHERE status='published')::int AS published,count(*) FILTER(WHERE status IN ('queued','processing'))::int AS pending,min(run_at) FILTER(WHERE status='queued') AS next_run FROM publish_jobs GROUP BY post_id) x
+ WHERE p.id=x.post_id`);
  const server=app.listen(PORT,'0.0.0.0',()=>console.log(`Orbit API listening on ${PORT}`));
  workerLoop().catch(e=>console.error('Worker stopped unexpectedly:',e));
  const shutdown=()=>{server.close(()=>pool.end().finally(()=>process.exit(0)));setTimeout(()=>process.exit(1),10000).unref()};
