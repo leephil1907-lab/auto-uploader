@@ -56,15 +56,15 @@ export default function AlgorithmCoach({ platforms = [], caption = '', file = nu
   }, [file]);
 
   const textChecks = useMemo(() => {
-    const words = caption.trim().split(/\\s+/).filter(Boolean);
-    const hashtags = caption.match(/#[\\p{L}\\p{N}_]+/gu) || [];
-    const hasQuestionOrPrompt = /\\?|\\b(comment|share|save|follow|tell me|which|what do you think)\\b/i.test(caption);
+    const words = caption.trim().split(/\s+/).filter(Boolean);
+    const hashtags = caption.match(/#[\p{L}\p{N}_]+/gu) || [];
+    const hasQuestionOrPrompt = /\?|\b(comment|share|save|follow|tell me|which|what do you think)\b/i.test(caption);
     const hasTopic = words.length >= 8;
     return { words: words.length, hashtags: hashtags.length, hasPrompt: hasQuestionOrPrompt, hasTopic };
   }, [caption]);
 
   const ratio = media?.width && media?.height ? media.width / media.height : null;
-  const vertical = ratio !== null && ratio < 0.8;
+  const vertical = ratio !== null && ratio > 0.5 && ratio < 0.7;
   const formatStatus = !media ? 'Add a video to inspect its format.' : vertical && media.height >= 1280 ? 'Vertical format detected.' : vertical ? 'Vertical, but consider exporting at 720 × 1280 or higher.' : 'This is not a 9:16 vertical video; consider a dedicated vertical cut for Reels and Shorts.';
   const chosen = platforms.filter(name => guidance[name]);
 
