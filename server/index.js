@@ -281,7 +281,7 @@ async function publishTikTok(job,post,media,account,token){
  return waitForTikTok(publishId,token);
 }
 async function publishInstagram(job,post,media,account,token){
- if(job.remote_id?.startsWith('ig_media:'))return job.remote_id.slice(8);
+ if(job.remote_id?.startsWith('ig_media:'))return job.remote_id.slice(9);
  const igId=account.metadata.instagramUserId||account.provider_user_id,url=publicMediaUrl(media.id,media.public_token);
  let containerId=job.remote_id?.startsWith('ig_container:')?job.remote_id.slice(13):null;
  if(!containerId){
