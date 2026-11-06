@@ -212,7 +212,7 @@ app.get('/public/media/:id',async(req,res,next)=>{try{
  if(!r.rowCount||!crypto.timingSafeEqual(Buffer.from(r.rows[0].public_token_hash),Buffer.from(hash(String(req.query.token||'')))))return res.sendStatus(404);
  res.setHeader('Content-Type',r.rows[0].mime_type);res.setHeader('Content-Length',r.rows[0].size_bytes);res.setHeader('Cache-Control','private, max-age=300');res.sendFile(path.resolve(r.rows[0].storage_path));
  }catch(e){next(e)}});
-app.post('/api/posts',auth,async(req,res,next)=>{const client=await pool.connect();try{
+app.post('/api/posts',auth,async(req,res,next)=>{let client;try{client=await pool.connect();
  const caption=String(req.body.caption||'').slice(0,2200),mediaId=req.body.mediaId||null,platforms=Array.isArray(req.body.platforms)?[...new Set(req.body.platforms.map(String))]:[],scheduledAt=req.body.scheduledAt?new Date(req.body.scheduledAt):null,tiktokPrivacy=String(req.body.tiktokPrivacy||'SELF_ONLY');
  if(!['PUBLIC_TO_EVERYONE','MUTUAL_FOLLOW_FRIENDS','FOLLOWER_OF_CREATOR','SELF_ONLY'].includes(tiktokPrivacy))return res.status(400).json({error:'Invalid TikTok privacy setting'});
  if(!caption.trim()&&!mediaId)return res.status(400).json({error:'Add a caption or video before saving'});
@@ -228,7 +228,7 @@ app.post('/api/posts',auth,async(req,res,next)=>{const client=await pool.connect
  }
  await client.query('COMMIT');await event(req.user.id,platforms.length?'publish_queued':'draft_created',{platforms,scheduledAt},post.id);
  res.status(201).json({post});
- }catch(e){await client.query('ROLLBACK');if(e.code==='23503')return res.status(400).json({error:'Selected media or account is no longer available'});next(e)}finally{client.release()}});
+ }catch(e){if(client)await client.query('ROLLBACK').catch(()=>{});if(e.code==='23503')return res.status(400).json({error:'Selected media or account is no longer available'});next(e)}finally{client?.release()}});
 app.delete('/api/posts/:id',auth,async(req,res,next)=>{try{const r=await pool.query('DELETE FROM posts WHERE id=$1 AND user_id=$2 RETURNING id',[req.params.id,req.user.id]);if(!r.rowCount)return res.status(404).json({error:'Post not found'});await event(req.user.id,'post_deleted',{postId:req.params.id});res.json({ok:true})}catch(e){next(e)}});
 app.get('/api/posts',auth,async(req,res,next)=>{try{
  const r=await pool.query(`SELECT p.id,p.caption,p.status,p.scheduled_at,p.created_at,m.id AS media_id,m.filename,
