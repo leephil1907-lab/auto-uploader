@@ -1,64 +1,69 @@
 # Orbit — Social Publishing Studio
 
-A responsive, motion-led social video publishing dashboard built with React, Vite, Framer Motion, Recharts and Lucide.
+Orbit is a responsive video publishing studio built with React, Vite, Framer Motion, Express and PostgreSQL. It includes account authentication, encrypted social OAuth credentials, media uploads, a durable PostgreSQL publishing queue and per-platform delivery records.
 
 ## Run locally
 
+Use Node.js 20.11+ and PostgreSQL 15+.
+
 ```bash
+cp .env.example .env
 npm install
 npm run dev
 ```
 
-Create a production build with `npm run build`.
+For local API use, run `npm start` in a second terminal after building the frontend. The API serves the built frontend and creates the database tables at startup.
 
-## Deploy on Render
+## Render deployment
 
-Create a **Static Site** connected to this repository:
-- Build command: `npm install && npm run build`
-- Publish directory: `dist`
+The included `render.yaml` configures a single Node web service, health check and persistent media disk. It does not provision a database automatically. Attach a PostgreSQL database (Render PostgreSQL or Supabase) and configure all required environment variables before deployment.
 
-The included `render.yaml` provides the same static-site configuration.
+Required variables:
+- `DATABASE_URL`: PostgreSQL connection string.
+- `APP_URL`: public HTTPS URL of the deployed service.
+- `ALLOWED_ORIGINS`: same public origin.
+- `TOKEN_ENCRYPTION_KEY`: stable base64-encoded 32-byte key. Generate with `openssl rand -base64 32`.
+- `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`.
+- `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`.
+- `META_APP_ID`, `META_APP_SECRET`.
 
-## Current application scope
+Keep the encryption key stable. Losing it makes stored social tokens unreadable. Never place provider secrets or database credentials in frontend code.
 
-The first frontend release includes:
-- Responsive workspace navigation and overview dashboard
-- Content library with search and status filters
-- Video selection, caption composer and draft/schedule interactions
-- Connected-channel management interface
-- Calendar, analytics and workspace settings views
-
-## Production integrations still required
-
-The UI deliberately does not pretend that social accounts have been authenticated or that videos have been uploaded to external platforms. Real publishing requires a secure backend and platform-approved OAuth/API credentials. Before enabling production publishing, add:
-1. User authentication and tenant-scoped data access.
-2. Encrypted OAuth token storage and refresh handling.
-3. Durable media storage and upload validation/transcoding.
-4. A persistent job queue with retries, idempotency and per-platform status.
-5. Official API adapters for each platform, respecting its publishing permissions and rate limits.
-6. Webhooks/polling for publish status and analytics ingestion.
-
-Never place platform client secrets or access tokens in frontend environment variables. The current demo interactions are local UI state only.
-
-## Backend deployment requirements
-
-The service requires a PostgreSQL database and a persistent disk. Configure these Render environment variables before the first deployment:
-
-- `DATABASE_URL`: PostgreSQL connection string (Render PostgreSQL or Supabase).
-- `APP_URL`: the public HTTPS URL of this same service.
-- `ALLOWED_ORIGINS`: the same public origin.
-- `TOKEN_ENCRYPTION_KEY`: a stable base64-encoded 32-byte key generated with `openssl rand -base64 32`.
-- `YOUTUBE_CLIENT_ID` and `YOUTUBE_CLIENT_SECRET`.
-- `TIKTOK_CLIENT_KEY` and `TIKTOK_CLIENT_SECRET`.
-- `META_APP_ID` and `META_APP_SECRET`.
-
-The Render blueprint creates the web service and persistent media disk, but it does not create a paid database automatically. Attach a PostgreSQL database and set `DATABASE_URL` before the health check can pass.
-
-OAuth callback URLs to register with the providers:
-
+Register these exact callback URLs with the relevant developer apps, replacing the hostname with the deployed service:
 - `https://YOUR-SERVICE.onrender.com/api/oauth/youtube/callback`
 - `https://YOUR-SERVICE.onrender.com/api/oauth/tiktok/callback`
 - `https://YOUR-SERVICE.onrender.com/api/oauth/facebook/callback`
 
-The frontend and API are served from the same origin, so no separate frontend API URL is needed. For local development, run the Vite frontend and the API server in separate terminals; set `APP_URL` to the API origin and configure a Vite proxy before using OAuth callbacks.
+## Implemented backend capabilities
 
+- Email/password registration and login with scrypt password hashing and HTTP-only session cookies.
+- Tenant-scoped PostgreSQL records for users, sessions, social accounts, media, posts, jobs and activity.
+- AES-256-GCM encryption for social access and refresh tokens at rest.
+- Video upload to a persistent disk and token-protected public media URLs for platform ingestion.
+- Durable scheduled jobs claimed using PostgreSQL `FOR UPDATE SKIP LOCKED`, retry backoff and per-platform outcomes.
+- YouTube OAuth and resumable video uploads.
+- TikTok Content Posting API Direct Post, creator privacy lookup, chunked upload and publish-status confirmation.
+- Meta OAuth for Facebook Pages and linked Instagram professional accounts; Facebook Page video publishing and Instagram Reels publishing.
+
+## Platform prerequisites and limitations
+
+- **YouTube:** enable YouTube Data API v3 and configure the OAuth consent screen with the upload/read scopes.
+- **TikTok:** enable the Content Posting API and obtain `video.publish` approval. TikTok documents that unaudited clients are restricted to private visibility.
+- **Instagram/Facebook:** use a Meta app with the required Page and Instagram permissions. Instagram Reels publishing requires an eligible professional account linked to a Facebook Page.
+- **Not yet implemented:** LinkedIn, X, Pinterest, Bilibili and the additional regional platforms exposed by the upstream CLI project. Platform analytics ingestion is also not implemented; the dashboard intentionally does not fabricate performance figures.
+
+A platform is shown as connected only after a successful OAuth callback. Real publishing still depends on your own provider app approval, credentials and user authorization.
+
+## API overview
+
+- `GET /api/health`
+- `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`
+- `GET /api/oauth/:platform/start` for `youtube`, `tiktok`, `facebook`
+- `GET /api/accounts`, `DELETE /api/accounts/:id`
+- `POST /api/media` (multipart field: `video`)
+- `POST /api/posts`, `GET /api/posts`, `DELETE /api/posts/:id`
+- `GET /api/activity`, `GET /api/config/status`
+
+## Upstream projects
+
+The workflow takes inspiration from [dreammis/social-auto-upload](https://github.com/dreammis/social-auto-upload) and [Automated-video-uploader-for-multiple-social-media-platforms](https://github.com/ADITYATALEKAR/Automated-video-uploader-for-multiple-social-media-platforms). This repository is a separate web application, not a wholesale copy of either project.
