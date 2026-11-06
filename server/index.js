@@ -99,9 +99,10 @@ function passwordMatches(password,stored){
  return actual.length===expected.length&&crypto.timingSafeEqual(actual,expected);
 }
 function cookie(res,value,maxAge=60*60*24*30){
- res.cookie(COOKIE_NAME,value,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge});
+ const secure=process.env.NODE_ENV==='production'?'; Secure':'';
+ res.setHeader('Set-Cookie',COOKIE_NAME+'='+encodeURIComponent(value)+'; Path=/; HttpOnly; SameSite=Lax; Max-Age='+maxAge+secure);
 }
-function clearCookie(res){res.clearCookie(COOKIE_NAME,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/'})}
+function clearCookie(res){const secure=process.env.NODE_ENV==='production'?'; Secure':'';res.setHeader('Set-Cookie',COOKIE_NAME+'=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0'+secure)}
 async function auth(req,res,next){
  try{
   const token=req.cookies?.[COOKIE_NAME];
@@ -225,6 +226,7 @@ app.post('/api/posts',auth,async(req,res,next)=>{const client=await pool.connect
  await client.query('COMMIT');await event(req.user.id,platforms.length?'publish_queued':'draft_created',{platforms,scheduledAt},post.id);
  res.status(201).json({post});
  }catch(e){await client.query('ROLLBACK');if(e.code==='23503')return res.status(400).json({error:'Selected media or account is no longer available'});next(e)}finally{client.release()}});
+app.delete('/api/posts/:id',auth,async(req,res,next)=>{try{const r=await pool.query('DELETE FROM posts WHERE id=$1 AND user_id=$2 RETURNING id',[req.params.id,req.user.id]);if(!r.rowCount)return res.status(404).json({error:'Post not found'});await event(req.user.id,'post_deleted',{postId:req.params.id});res.json({ok:true})}catch(e){next(e)}});
 app.get('/api/posts',auth,async(req,res,next)=>{try{
  const r=await pool.query(`SELECT p.id,p.caption,p.status,p.scheduled_at,p.created_at,m.id AS media_id,m.filename,
  COALESCE(json_agg(json_build_object('platform',a.platform,'accountName',a.display_name,'status',j.status,'remoteId',j.remote_id,'error',j.last_error)) FILTER(WHERE j.id IS NOT NULL),'[]') AS targets
@@ -339,6 +341,7 @@ async function start(){
  await fs.mkdir(MEDIA_DIR,{recursive:true});
  await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
  await pool.query(schema);
+ await pool.query("UPDATE publish_jobs SET status='failed',last_error='Worker stopped before confirming the result. Check the social account before retrying.',locked_at=NULL WHERE status='processing'");
  const server=app.listen(PORT,'0.0.0.0',()=>console.log(`Orbit API listening on ${PORT}`));
  workerLoop().catch(e=>console.error('Worker stopped unexpectedly:',e));
  const shutdown=()=>{server.close(()=>pool.end().finally(()=>process.exit(0)));setTimeout(()=>process.exit(1),10000).unref()};
