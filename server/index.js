@@ -54,8 +54,9 @@ CREATE TABLE IF NOT EXISTS posts (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  media_id uuid REFERENCES media_assets(id) ON DELETE SET NULL, caption text NOT NULL DEFAULT '',
  status text NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','scheduled','publishing','published','partial','failed')),
- scheduled_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+ scheduled_at timestamptz, tiktok_privacy text NOT NULL DEFAULT 'SELF_ONLY', created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS tiktok_privacy text NOT NULL DEFAULT 'SELF_ONLY';
 ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS public_token_enc text;
 CREATE TABLE IF NOT EXISTS publish_jobs (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -268,7 +269,9 @@ async function publishTikTok(job,post,media,account,token){
  const init=await fetch('https://open.tiktokapis.com/v2/post/publish/video/init/',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify({post_info:{title:post.caption.slice(0,2200),privacy_level:privacy},source_info:{source:'FILE_UPLOAD',video_size:size,chunk_size:Math.min(chunk,size),total_chunk_count:count}})});
  const started=await init.json();if(!init.ok||started.error?.code!=='ok')throw new Error(started.error?.message||'TikTok publish initialization failed');
  const handle=await fs.open(media.storage_path,'r');try{for(let i=0;i<count;i++){const length=Math.min(chunk,size-i*chunk),buffer=Buffer.alloc(length);await handle.read(buffer,0,length,i*chunk);const end=i*chunk+length-1;const put=await fetch(started.data.upload_url,{method:'PUT',headers:{'content-type':media.mime_type,'content-length':String(length),'content-range':`bytes ${i*chunk}-${end}/${size}`},body:buffer});if(!put.ok)throw new Error('TikTok video transfer failed at chunk '+(i+1));}}finally{await handle.close()}
- return started.data.publish_id;
+ const publishId=started.data.publish_id;
+ for(let i=0;i<24;i++){await sleep(5000);const status=await fetch('https://open.tiktokapis.com/v2/post/publish/status/fetch/',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify({publish_id:publishId})}).then(x=>x.json());if(status.error?.code&&status.error.code!=='ok')throw new Error(status.error.message||'TikTok status check failed');const state=status.data?.status;if(state==='PUBLISH_COMPLETE')return publishId;if(state==='FAILED')throw new Error(status.data?.fail_reason||'TikTok could not complete the post');}
+ throw new Error('TikTok is still processing this post. Check the TikTok publishing status before retrying.');
 }
 async function publishInstagram(job,post,media,account,token){
  const igId=account.metadata.instagramUserId||account.provider_user_id,url=publicMediaUrl(media.id,media.public_token);
