@@ -13,5 +13,5 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      - run: node --check server/index.js
+      - run: npm test
       - run: npm run build
