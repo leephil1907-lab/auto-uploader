@@ -212,13 +212,14 @@ app.get('/public/media/:id',async(req,res,next)=>{try{
  res.setHeader('Content-Type',r.rows[0].mime_type);res.setHeader('Content-Length',r.rows[0].size_bytes);res.setHeader('Cache-Control','private, max-age=300');res.sendFile(path.resolve(r.rows[0].storage_path));
  }catch(e){next(e)}});
 app.post('/api/posts',auth,async(req,res,next)=>{const client=await pool.connect();try{
- const caption=String(req.body.caption||'').slice(0,2200),mediaId=req.body.mediaId||null,platforms=Array.isArray(req.body.platforms)?[...new Set(req.body.platforms.map(String))]:[],scheduledAt=req.body.scheduledAt?new Date(req.body.scheduledAt):null;
+ const caption=String(req.body.caption||'').slice(0,2200),mediaId=req.body.mediaId||null,platforms=Array.isArray(req.body.platforms)?[...new Set(req.body.platforms.map(String))]:[],scheduledAt=req.body.scheduledAt?new Date(req.body.scheduledAt):null,tiktokPrivacy=String(req.body.tiktokPrivacy||'SELF_ONLY');
+ if(!['PUBLIC_TO_EVERYONE','MUTUAL_FOLLOW_FRIENDS','FOLLOWER_OF_CREATOR','SELF_ONLY'].includes(tiktokPrivacy))return res.status(400).json({error:'Invalid TikTok privacy setting'});
  if(!caption.trim()&&!mediaId)return res.status(400).json({error:'Add a caption or video before saving'});
  if(platforms.length&& !mediaId)return res.status(400).json({error:'Video media is required for social video publishing'});
  if(scheduledAt&&Number.isNaN(scheduledAt.getTime()))return res.status(400).json({error:'Invalid schedule date'});
  await client.query('BEGIN');
  if(mediaId){const m=await client.query('SELECT id FROM media_assets WHERE id=$1 AND user_id=$2',[mediaId,req.user.id]);if(!m.rowCount)throw new Error('Media not found for this account');}
- const post=(await client.query('INSERT INTO posts(user_id,media_id,caption,status,scheduled_at) VALUES($1,$2,$3,$4,$5) RETURNING *',[req.user.id,mediaId,caption,platforms.length?(scheduledAt?'scheduled':'publishing'):'draft',scheduledAt])).rows[0];
+ const post=(await client.query('INSERT INTO posts(user_id,media_id,caption,status,scheduled_at,tiktok_privacy) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[req.user.id,mediaId,caption,platforms.length?(scheduledAt?'scheduled':'publishing'):'draft',scheduledAt,tiktokPrivacy])).rows[0];
  for(const platform of platforms){
   const account=await client.query('SELECT id FROM social_accounts WHERE user_id=$1 AND platform=$2',[req.user.id,platform]);
   if(!account.rowCount)throw new Error(`Connect a ${platform} account before publishing`);
@@ -253,7 +254,7 @@ async function getAccessToken(account){
  return decrypt(account.access_token_enc);
 }
 async function publishYoutube(job,post,media,account,token){
- const fileStat=await fs.stat(media.storage_path),init=await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json; charset=UTF-8','x-upload-content-length':String(fileStat.size),'x-upload-content-type':media.mime_type},body:JSON.stringify({snippet:{title:(post.caption||media.filename).slice(0,100),description:post.caption,categoryId:'22'},status:{privacyStatus:'private'}})});
+ const fileStat=await fs.stat(media.storage_path),init=await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json; charset=UTF-8','x-upload-content-length':String(fileStat.size),'x-upload-content-type':media.mime_type},body:JSON.stringify({snippet:{title:(post.caption||media.filename).slice(0,100),description:post.caption,categoryId:'22'},status:{privacyStatus:'public'}})});
  if(!init.ok)throw new Error('YouTube upload initialization failed: '+(await init.text()).slice(0,400));
  const location=init.headers.get('location');if(!location)throw new Error('YouTube did not return a resumable upload URL');
  const done=await fetch(location,{method:'PUT',headers:{'content-length':String(fileStat.size),'content-type':media.mime_type},body:createReadStream(media.storage_path),duplex:'half'});
@@ -262,7 +263,7 @@ async function publishYoutube(job,post,media,account,token){
 async function publishTikTok(job,post,media,account,token){
  const info=await fetch('https://open.tiktokapis.com/v2/post/publish/creator_info/query/',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'}});
  const creator=await info.json();if(!info.ok||creator.error?.code!=='ok')throw new Error(creator.error?.message||'Could not retrieve TikTok creator settings');
- const privacy=creator.data?.privacy_level_options?.includes('SELF_ONLY')?'SELF_ONLY':creator.data?.privacy_level_options?.[0];if(!privacy)throw new Error('TikTok returned no available privacy setting');
+ const privacy=post.tiktok_privacy||'SELF_ONLY';if(!creator.data?.privacy_level_options?.includes(privacy))throw new Error('The selected TikTok privacy option is unavailable for this account. Choose another option.');
  const size=Number(media.size_bytes),chunk=10*1024*1024,count=Math.ceil(size/chunk);
  const init=await fetch('https://open.tiktokapis.com/v2/post/publish/video/init/',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify({post_info:{title:post.caption.slice(0,2200),privacy_level:privacy},source_info:{source:'FILE_UPLOAD',video_size:size,chunk_size:Math.min(chunk,size),total_chunk_count:count}})});
  const started=await init.json();if(!init.ok||started.error?.code!=='ok')throw new Error(started.error?.message||'TikTok publish initialization failed');
@@ -285,7 +286,7 @@ async function publishFacebook(job,post,media,account,token){
  if(result.error)throw new Error(result.error.message);return result.id;
 }
 async function executeJob(job){
- const data=await pool.query(`SELECT j.*,p.caption,p.media_id,a.platform,a.provider_user_id,a.access_token_enc,a.refresh_token_enc,a.token_expires_at,a.metadata,m.storage_path,m.mime_type,m.size_bytes,m.filename,m.public_token_hash
+ const data=await pool.query(`SELECT j.*,p.caption,p.media_id,p.tiktok_privacy,a.platform,a.provider_user_id,a.access_token_enc,a.refresh_token_enc,a.token_expires_at,a.metadata,m.storage_path,m.mime_type,m.size_bytes,m.filename,m.public_token_hash
  FROM publish_jobs j JOIN posts p ON p.id=j.post_id JOIN social_accounts a ON a.id=j.account_id LEFT JOIN media_assets m ON m.id=p.media_id
  WHERE j.id=$1`,[job.id]);
  if(!data.rowCount)throw new Error('Publish job data is missing');
