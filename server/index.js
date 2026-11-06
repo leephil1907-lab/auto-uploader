@@ -230,7 +230,7 @@ app.post('/api/posts',auth,async(req,res,next)=>{let client;try{client=await poo
  res.status(201).json({post});
  }catch(e){if(client)await client.query('ROLLBACK').catch(()=>{});if(e.code==='23503')return res.status(400).json({error:'Selected media or account is no longer available'});next(e)}finally{client?.release()}});
 app.delete('/api/posts/:id',auth,async(req,res,next)=>{try{const r=await pool.query('DELETE FROM posts WHERE id=$1 AND user_id=$2 RETURNING id',[req.params.id,req.user.id]);if(!r.rowCount)return res.status(404).json({error:'Post not found'});await event(req.user.id,'post_deleted',{postId:req.params.id});res.json({ok:true})}catch(e){next(e)}});
-app.post('/api/posts/:id/retry',auth,async(req,res,next)=>{try{const r=await pool.query("UPDATE publish_jobs SET status='queued',attempts=0,run_at=now(),last_error=NULL,locked_at=NULL WHERE post_id=$1 AND user_id=$2 AND status='failed' RETURNING id",[req.params.id,req.user.id]);if(!r.rowCount)return res.status(409).json({error:'There are no failed channel deliveries to retry'});await pool.query("UPDATE posts SET status='publishing',updated_at=now() WHERE id=$1 AND user_id=$2",[req.params.id,req.user.id]);await event(req.user.id,'publish_retry_queued',{jobs:r.rowCount},req.params.id);res.json({ok:true,retried:r.rowCount})}catch(e){next(e)}});
+app.post('/api/posts/:id/retry',auth,async(req,res,next)=>{try{const r=await pool.query("UPDATE publish_jobs SET status='queued',attempts=0,run_at=now(),last_error=NULL,remote_id=NULL,locked_at=NULL WHERE post_id=$1 AND user_id=$2 AND status='failed' RETURNING id",[req.params.id,req.user.id]);if(!r.rowCount)return res.status(409).json({error:'There are no failed channel deliveries to retry'});await pool.query("UPDATE posts SET status='publishing',updated_at=now() WHERE id=$1 AND user_id=$2",[req.params.id,req.user.id]);await event(req.user.id,'publish_retry_queued',{jobs:r.rowCount},req.params.id);res.json({ok:true,retried:r.rowCount})}catch(e){next(e)}});
 app.get('/api/posts',auth,async(req,res,next)=>{try{
  const r=await pool.query(`SELECT p.id,p.caption,p.status,p.scheduled_at,p.created_at,m.id AS media_id,m.filename,
  COALESCE(json_agg(json_build_object('platform',a.platform,'accountName',a.display_name,'status',j.status,'remoteId',j.remote_id,'error',j.last_error)) FILTER(WHERE j.id IS NOT NULL),'[]') AS targets
@@ -256,11 +256,12 @@ async function getAccessToken(account){
  return decrypt(account.access_token_enc);
 }
 async function publishYoutube(job,post,media,account,token){
+ if(job.remote_id)return job.remote_id;
  const fileStat=await fs.stat(media.storage_path),init=await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json; charset=UTF-8','x-upload-content-length':String(fileStat.size),'x-upload-content-type':media.mime_type},body:JSON.stringify({snippet:{title:(post.caption||media.filename).slice(0,100),description:post.caption,categoryId:'22'},status:{privacyStatus:'public'}})});
  if(!init.ok)throw new Error('YouTube upload initialization failed: '+(await init.text()).slice(0,400));
  const location=init.headers.get('location');if(!location)throw new Error('YouTube did not return a resumable upload URL');
  const done=await fetch(location,{method:'PUT',headers:{'content-length':String(fileStat.size),'content-type':media.mime_type},body:createReadStream(media.storage_path),duplex:'half'});
- const data=await done.json();if(!done.ok)throw new Error(data.error?.message||'YouTube video upload failed');return data.id;
+ const data=await done.json();if(!done.ok)throw new Error(data.error?.message||'YouTube video upload failed');await pool.query('UPDATE publish_jobs SET remote_id=$1 WHERE id=$2',[data.id,job.id]);return data.id;
 }
 async function waitForTikTok(publishId,token){
  for(let i=0;i<24;i++){await sleep(5000);const status=await fetch('https://open.tiktokapis.com/v2/post/publish/status/fetch/',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify({publish_id:publishId})}).then(x=>x.json());if(status.error?.code&&status.error.code!=='ok')throw new Error(status.error.message||'TikTok status check failed');const state=status.data?.status;if(state==='PUBLISH_COMPLETE')return publishId;if(state==='FAILED')throw new Error(status.data?.fail_reason||'TikTok could not complete the post');}
@@ -280,19 +281,25 @@ async function publishTikTok(job,post,media,account,token){
  return waitForTikTok(publishId,token);
 }
 async function publishInstagram(job,post,media,account,token){
+ if(job.remote_id?.startsWith('ig_media:'))return job.remote_id.slice(8);
  const igId=account.metadata.instagramUserId||account.provider_user_id,url=publicMediaUrl(media.id,media.public_token);
- const params=new URLSearchParams({media_type:'REELS',video_url:url,caption:post.caption,share_to_feed:'true',access_token:token});
- const created=await fetch(`https://graph.facebook.com/v22.0/${igId}/media`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:params}).then(x=>x.json());
- if(created.error)throw new Error(created.error.message||'Instagram media container creation failed');
- let state='IN_PROGRESS';for(let i=0;i<30&&state==='IN_PROGRESS';i++){await sleep(5000);const status=await fetch(`https://graph.facebook.com/v22.0/${created.id}?fields=status_code&access_token=${encodeURIComponent(token)}`).then(x=>x.json());if(status.error)throw new Error(status.error.message);state=status.status_code;if(state==='ERROR')throw new Error('Instagram could not process this Reel');}
+ let containerId=job.remote_id?.startsWith('ig_container:')?job.remote_id.slice(13):null;
+ if(!containerId){
+  const params=new URLSearchParams({media_type:'REELS',video_url:url,caption:post.caption,share_to_feed:'true',access_token:token});
+  const created=await fetch(`https://graph.facebook.com/v22.0/${igId}/media`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:params}).then(x=>x.json());
+  if(created.error)throw new Error(created.error.message||'Instagram media container creation failed');
+  containerId=created.id;await pool.query('UPDATE publish_jobs SET remote_id=$1 WHERE id=$2',['ig_container:'+containerId,job.id]);
+ }
+ let state='IN_PROGRESS';for(let i=0;i<30&&state==='IN_PROGRESS';i++){await sleep(5000);const status=await fetch(`https://graph.facebook.com/v22.0/${containerId}?fields=status_code&access_token=${encodeURIComponent(token)}`).then(x=>x.json());if(status.error)throw new Error(status.error.message);state=status.status_code;if(state==='ERROR')throw new Error('Instagram could not process this Reel');}
  if(state!=='FINISHED')throw new Error('Instagram video is still processing; retry the publication later');
- const published=await fetch(`https://graph.facebook.com/v22.0/${igId}/media_publish`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({creation_id:created.id,access_token:token})}).then(x=>x.json());
- if(published.error)throw new Error(published.error.message);return published.id;
+ const published=await fetch(`https://graph.facebook.com/v22.0/${igId}/media_publish`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({creation_id:containerId,access_token:token})}).then(x=>x.json());
+ if(published.error)throw new Error(published.error.message);await pool.query('UPDATE publish_jobs SET remote_id=$1 WHERE id=$2',['ig_media:'+published.id,job.id]);return published.id;
 }
 async function publishFacebook(job,post,media,account,token){
+ if(job.remote_id)return job.remote_id;
  const url=publicMediaUrl(media.id,media.public_token),pageId=account.metadata.pageId||account.provider_user_id;
  const result=await fetch(`https://graph.facebook.com/v22.0/${pageId}/videos`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({file_url:url,description:post.caption,access_token:token})}).then(x=>x.json());
- if(result.error)throw new Error(result.error.message);return result.id;
+ if(result.error)throw new Error(result.error.message);await pool.query('UPDATE publish_jobs SET remote_id=$1 WHERE id=$2',[result.id,job.id]);return result.id;
 }
 async function executeJob(job){
  const data=await pool.query(`SELECT j.*,p.caption,p.media_id,p.tiktok_privacy,a.platform,a.provider_user_id,a.access_token_enc,a.refresh_token_enc,a.token_expires_at,a.metadata,m.storage_path,m.mime_type,m.size_bytes,m.filename,m.public_token_hash
