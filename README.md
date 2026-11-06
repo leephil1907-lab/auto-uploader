@@ -61,7 +61,7 @@ A platform is shown as connected only after a successful OAuth callback. Real pu
 - `GET /api/oauth/:platform/start` for `youtube`, `tiktok`, `facebook`
 - `GET /api/accounts`, `DELETE /api/accounts/:id`
 - `POST /api/media` (multipart field: `video`)
-- `POST /api/posts`, `GET /api/posts`, `DELETE /api/posts/:id`
+- `POST /api/posts`, `GET /api/posts`, `DELETE /api/posts/:id`, `POST /api/posts/:id/retry`
 - `GET /api/activity`, `GET /api/config/status`
 
 ## Upstream projects
