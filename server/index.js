@@ -20,6 +20,7 @@ const PORT = Number(process.env.PORT || 8080);
 const MEDIA_DIR = process.env.MEDIA_DIR || '/var/data/media';
 const APP_URL = (process.env.APP_URL || '').replace(/\/$/, '');
 const TOKEN_KEY = process.env.TOKEN_ENCRYPTION_KEY || '';
+const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v27.0';
 const COOKIE_NAME = 'orbit_session';
 const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_BYTES || 536870912);
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || APP_URL).split(',').map(x => x.trim()).filter(Boolean);
@@ -143,7 +144,7 @@ app.post('/api/auth/logout',auth,async(req,res,next)=>{try{await pool.query('DEL
 const oauthConfig={
  youtube:{client:()=>[process.env.YOUTUBE_CLIENT_ID,process.env.YOUTUBE_CLIENT_SECRET],authorize:'https://accounts.google.com/o/oauth2/v2/auth',token:'https://oauth2.googleapis.com/token',scope:'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly',redirect:'/api/oauth/youtube/callback'},
  tiktok:{client:()=>[process.env.TIKTOK_CLIENT_KEY,process.env.TIKTOK_CLIENT_SECRET],authorize:'https://www.tiktok.com/v2/auth/authorize/',token:'https://open.tiktokapis.com/v2/oauth/token/',scope:'user.info.basic,video.publish',redirect:'/api/oauth/tiktok/callback'},
- facebook:{client:()=>[process.env.META_APP_ID,process.env.META_APP_SECRET],authorize:'https://www.facebook.com/v22.0/dialog/oauth',token:'https://graph.facebook.com/v22.0/oauth/access_token',scope:'pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish',redirect:'/api/oauth/facebook/callback'}
+ facebook:{client:()=>[process.env.META_APP_ID,process.env.META_APP_SECRET],authorize:`https://www.facebook.com/${META_GRAPH_VERSION}/dialog/oauth`,token:`https://graph.facebook.com/${META_GRAPH_VERSION}/oauth/access_token`,scope:'pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish',redirect:'/api/oauth/facebook/callback'}
 };
 function callbackUrl(platform){return APP_URL+oauthConfig[platform].redirect}
 app.get('/api/oauth/:platform/start',auth,async(req,res,next)=>{try{
@@ -176,7 +177,7 @@ async function exchangeCode(platform,code){
  const t=await fetch(tokenUrl).then(x=>x.json());if(t.error||!t.access_token)throw new Error(t.error?.message||'Meta token exchange failed');
  const longTokenUrl=new URL(c.token);longTokenUrl.search=new URLSearchParams({grant_type:'fb_exchange_token',client_id:clientId,client_secret:secret,fb_exchange_token:t.access_token}).toString();
  const extended=await fetch(longTokenUrl).then(x=>x.json());if(extended.error||!extended.access_token)throw new Error(extended.error?.message||'Meta long-lived token exchange failed');
- const me=await fetch(`https://graph.facebook.com/v22.0/me/accounts?fields=id,name,access_token,instagram_business_account{id,username}&access_token=${encodeURIComponent(extended.access_token)}`).then(x=>x.json());
+ const me=await fetch(`https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts?fields=id,name,access_token,instagram_business_account{id,username}&access_token=${encodeURIComponent(extended.access_token)}`).then(x=>x.json());
  if(me.error)throw new Error(me.error.message);
  const accounts=[];
  for(const page of me.data||[]){
@@ -293,19 +294,19 @@ async function publishInstagram(job,post,media,account,token){
  let containerId=job.remote_id?.startsWith('ig_container:')?job.remote_id.slice(13):null;
  if(!containerId){
   const params=new URLSearchParams({media_type:'REELS',video_url:url,caption:post.caption,share_to_feed:'true',access_token:token});
-  const created=await fetch(`https://graph.facebook.com/v22.0/${igId}/media`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:params}).then(x=>x.json());
+  const created=await fetch(`https://graph.facebook.com/${META_GRAPH_VERSION}/${igId}/media`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:params}).then(x=>x.json());
   if(created.error)throw new Error(created.error.message||'Instagram media container creation failed');
   containerId=created.id;await pool.query('UPDATE publish_jobs SET remote_id=$1 WHERE id=$2',['ig_container:'+containerId,job.id]);
  }
- let state='IN_PROGRESS';for(let i=0;i<30&&state==='IN_PROGRESS';i++){await sleep(5000);const status=await fetch(`https://graph.facebook.com/v22.0/${containerId}?fields=status_code&access_token=${encodeURIComponent(token)}`).then(x=>x.json());if(status.error)throw new Error(status.error.message);state=status.status_code;if(state==='ERROR')throw new Error('Instagram could not process this Reel');}
+ let state='IN_PROGRESS';for(let i=0;i<30&&state==='IN_PROGRESS';i++){await sleep(5000);const status=await fetch(`https://graph.facebook.com/${META_GRAPH_VERSION}/${containerId}?fields=status_code&access_token=${encodeURIComponent(token)}`).then(x=>x.json());if(status.error)throw new Error(status.error.message);state=status.status_code;if(state==='ERROR')throw new Error('Instagram could not process this Reel');}
  if(state!=='FINISHED')throw new Error('Instagram video is still processing; retry the publication later');
- const published=await fetch(`https://graph.facebook.com/v22.0/${igId}/media_publish`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({creation_id:containerId,access_token:token})}).then(x=>x.json());
+ const published=await fetch(`https://graph.facebook.com/${META_GRAPH_VERSION}/${igId}/media_publish`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({creation_id:containerId,access_token:token})}).then(x=>x.json());
  if(published.error)throw new Error(published.error.message);await pool.query('UPDATE publish_jobs SET remote_id=$1 WHERE id=$2',['ig_media:'+published.id,job.id]);return published.id;
 }
 async function publishFacebook(job,post,media,account,token){
  if(job.remote_id)return job.remote_id;
  const url=publicMediaUrl(media.id,media.public_token),pageId=account.metadata.pageId||account.provider_user_id;
- const result=await fetch(`https://graph.facebook.com/v22.0/${pageId}/videos`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({file_url:url,description:post.caption,access_token:token})}).then(x=>x.json());
+ const result=await fetch(`https://graph.facebook.com/${META_GRAPH_VERSION}/${pageId}/videos`,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({file_url:url,description:post.caption,access_token:token})}).then(x=>x.json());
  if(result.error)throw new Error(result.error.message);await pool.query('UPDATE publish_jobs SET remote_id=$1 WHERE id=$2',[result.id,job.id]);return result.id;
 }
 async function executeJob(job){
