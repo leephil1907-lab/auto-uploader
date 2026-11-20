@@ -25,7 +25,7 @@ Required variables:
 - `TOKEN_ENCRYPTION_KEY`: stable base64-encoded 32-byte key. Generate with `openssl rand -base64 32`.
 - `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`.
 - `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`.
-- `META_APP_ID`, `META_APP_SECRET`.
+- `META_APP_ID`, `META_APP_SECRET`, and optionally `META_GRAPH_VERSION` (defaults to `v27.0`).
 
 Keep the encryption key stable. Losing it makes stored social tokens unreadable. Never place provider secrets or database credentials in frontend code.
 
@@ -44,6 +44,8 @@ Register these exact callback URLs with the relevant developer apps, replacing t
 - YouTube OAuth and resumable video uploads.
 - TikTok Content Posting API Direct Post, creator privacy lookup, chunked upload and publish-status confirmation.
 - Meta OAuth for Facebook Pages and linked Instagram professional accounts; Facebook Page video publishing and Instagram Reels publishing.
+
+Meta Graph API calls use the version pinned by `META_GRAPH_VERSION` so the Facebook Login, Page discovery, Instagram Reels and Facebook video endpoints can be upgraded deliberately as Meta releases new versions.
 
 ## Platform prerequisites and limitations
 
