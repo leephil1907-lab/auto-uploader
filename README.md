@@ -49,7 +49,7 @@ Register these exact callback URLs with the relevant developer apps, replacing t
 
 - **YouTube:** enable YouTube Data API v3 and configure the OAuth consent screen with the upload/read scopes.
 - **TikTok:** enable the Content Posting API and obtain `video.publish` approval. TikTok documents that unaudited clients are restricted to private visibility.
-- **Instagram/Facebook:** use a Meta app with the required Page and Instagram permissions. Instagram Reels publishing requires an eligible professional account linked to a Facebook Page.
+- **Instagram/Facebook:** use a Meta app with the required Page and Instagram permissions. Instagram Reels publishing requires an eligible professional account linked to a Facebook Page. Orbit lists the Facebook Pages and linked Instagram professional accounts returned by Meta, and publication requests can target the exact selected account IDs rather than silently choosing the first Page.
 - **Not yet implemented:** LinkedIn, X, Pinterest, Bilibili and the additional regional platforms exposed by the upstream CLI project. Platform analytics ingestion is also not implemented; the dashboard intentionally does not fabricate performance figures.
 
 A platform is shown as connected only after a successful OAuth callback. Real publishing still depends on your own provider app approval, credentials and user authorization.
