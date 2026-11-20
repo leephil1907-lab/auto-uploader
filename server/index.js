@@ -213,20 +213,25 @@ app.get('/public/media/:id',async(req,res,next)=>{try{
  res.setHeader('Content-Type',r.rows[0].mime_type);res.setHeader('Content-Length',r.rows[0].size_bytes);res.setHeader('Cache-Control','private, max-age=300');res.sendFile(path.resolve(r.rows[0].storage_path));
  }catch(e){next(e)}});
 app.post('/api/posts',auth,async(req,res,next)=>{let client;try{client=await pool.connect();
- const caption=String(req.body.caption||'').slice(0,2200),mediaId=req.body.mediaId||null,platforms=Array.isArray(req.body.platforms)?[...new Set(req.body.platforms.map(String))]:[],scheduledAt=req.body.scheduledAt?new Date(req.body.scheduledAt):null,tiktokPrivacy=String(req.body.tiktokPrivacy||'SELF_ONLY');
+ const caption=String(req.body.caption||'').slice(0,2200),mediaId=req.body.mediaId||null,platforms=Array.isArray(req.body.platforms)?[...new Set(req.body.platforms.map(String))]:[],accountIds=Array.isArray(req.body.accountIds)?[...new Set(req.body.accountIds.map(String))]:[],scheduledAt=req.body.scheduledAt?new Date(req.body.scheduledAt):null,tiktokPrivacy=String(req.body.tiktokPrivacy||'SELF_ONLY');
  if(!['PUBLIC_TO_EVERYONE','MUTUAL_FOLLOW_FRIENDS','FOLLOWER_OF_CREATOR','SELF_ONLY'].includes(tiktokPrivacy))return res.status(400).json({error:'Invalid TikTok privacy setting'});
  if(!caption.trim()&&!mediaId)return res.status(400).json({error:'Add a caption or video before saving'});
- if(platforms.length&& !mediaId)return res.status(400).json({error:'Video media is required for social video publishing'});
+ if((platforms.length||accountIds.length)&&!mediaId)return res.status(400).json({error:'Video media is required for social video publishing'});
+ if(platforms.length&&accountIds.length)return res.status(400).json({error:'Choose channels using either account IDs or platform names, not both'});
  if(scheduledAt&&Number.isNaN(scheduledAt.getTime()))return res.status(400).json({error:'Invalid schedule date'});
  await client.query('BEGIN');
  if(mediaId){const m=await client.query('SELECT id FROM media_assets WHERE id=$1 AND user_id=$2',[mediaId,req.user.id]);if(!m.rowCount)throw new Error('Media not found for this account');}
- const post=(await client.query('INSERT INTO posts(user_id,media_id,caption,status,scheduled_at,tiktok_privacy) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[req.user.id,mediaId,caption,platforms.length?(scheduledAt?'scheduled':'publishing'):'draft',scheduledAt,tiktokPrivacy])).rows[0];
- for(const platform of platforms){
-  const account=await client.query('SELECT id FROM social_accounts WHERE user_id=$1 AND platform=$2',[req.user.id,platform]);
-  if(!account.rowCount)throw new Error(`Connect a ${platform} account before publishing`);
-  await client.query('INSERT INTO publish_jobs(user_id,post_id,account_id,run_at) VALUES($1,$2,$3,$4)',[req.user.id,post.id,account.rows[0].id,scheduledAt||new Date()]);
+ const selected=accountIds.length
+  ? await client.query('SELECT id,platform FROM social_accounts WHERE user_id=$1 AND id=ANY($2::uuid[])',[req.user.id,accountIds])
+  : await client.query('SELECT DISTINCT ON(platform) id,platform FROM social_accounts WHERE user_id=$1 AND platform=ANY($2::text[]) ORDER BY platform,created_at',[req.user.id,platforms]);
+ if(accountIds.length&&selected.rowCount!==accountIds.length)throw new Error('One or more selected channels are no longer available');
+ if(platforms.length&&selected.rowCount!==platforms.length)throw new Error('Connect each selected channel before publishing');
+ const hasTargets=selected.rowCount>0;
+ const post=(await client.query('INSERT INTO posts(user_id,media_id,caption,status,scheduled_at,tiktok_privacy) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[req.user.id,mediaId,caption,hasTargets?(scheduledAt?'scheduled':'publishing'):'draft',scheduledAt,tiktokPrivacy])).rows[0];
+ for(const account of selected.rows){
+  await client.query('INSERT INTO publish_jobs(user_id,post_id,account_id,run_at) VALUES($1,$2,$3,$4)',[req.user.id,post.id,account.id,scheduledAt||new Date()]);
  }
- await client.query('COMMIT');await event(req.user.id,platforms.length?'publish_queued':'draft_created',{platforms,scheduledAt},post.id);
+ await client.query('COMMIT');await event(req.user.id,hasTargets?'publish_queued':'draft_created',{platforms:selected.rows.map(x=>x.platform),accountIds,scheduledAt},post.id);
  res.status(201).json({post});
  }catch(e){if(client)await client.query('ROLLBACK').catch(()=>{});if(e.code==='23503')return res.status(400).json({error:'Selected media or account is no longer available'});next(e)}finally{client?.release()}});
 app.delete('/api/posts/:id',auth,async(req,res,next)=>{try{const r=await pool.query('DELETE FROM posts WHERE id=$1 AND user_id=$2 RETURNING id',[req.params.id,req.user.id]);if(!r.rowCount)return res.status(404).json({error:'Post not found'});await event(req.user.id,'post_deleted',{postId:req.params.id});res.json({ok:true})}catch(e){next(e)}});
