@@ -26,13 +26,13 @@ export default function CreativeStudio({ onPublish }) {
    const mime=supportedMime();const rec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);recorder.current=rec;
    rec.ondataavailable=e=>{if(e.data?.size)chunks.current.push(e.data)};
    const finished=new Promise((resolve,reject)=>{rec.onstop=resolve;rec.onerror=()=>reject(new Error('The browser encoder stopped unexpectedly'))});
-   rec.start(250);v.muted=false;v.currentTime=start;await new Promise(resolve=>{const fn=()=>{v.removeEventListener('seeked',fn);resolve()};v.addEventListener('seeked',fn,{once:true})});await v.play();
+   rec.start(250);v.muted=muted;await new Promise(resolve=>{if(Math.abs(v.currentTime-start)<0.04){resolve();return}const fn=()=>resolve();v.addEventListener('seeked',fn,{once:true});v.currentTime=start});await v.play();
    const render=()=>{draw();setProgress(Math.min(100,Math.round(((v.currentTime-start)/(end-start))*100)));if(v.currentTime>=end||v.ended){v.pause();if(rec.state==='recording')rec.stop();return}raf.current=requestAnimationFrame(render)};
    render();await finished;stream.getTracks().forEach(t=>t.stop());sourceStream?.getTracks().forEach(t=>t.stop());
    const blob=new Blob(chunks.current,{type:mime.split(';')[0]||'video/webm'});if(!blob.size)throw new Error('Export produced an empty video');
    const out=new File([blob],(file.name.replace(/\.[^.]+$/,'')||'orbit-edit')+'-orbit.webm',{type:blob.type});
    const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=out.name;link.click();URL.revokeObjectURL(link.href);
-   setProgress(100);setFile(out);setUrl(URL.createObjectURL(out));setReady(true);setDuration(end-start);setStart(0);setEnd(end-start);
+   setProgress(100);setFile(out);setUrl('');setReady(true);setDuration(end-start);setStart(0);setEnd(end-start);
    if(onPublish)onPublish(out);
   }catch(e){setError(e.message||'Export failed.');}finally{setBusy(false);if(video.current)video.current.pause()}
  };
