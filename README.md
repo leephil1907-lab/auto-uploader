@@ -25,7 +25,7 @@ Required variables:
 - `TOKEN_ENCRYPTION_KEY`: stable base64-encoded 32-byte key. Generate with `openssl rand -base64 32`.
 - `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`.
 - `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`.
-- `META_APP_ID`, `META_APP_SECRET`.
+- `META_APP_ID`, `META_APP_SECRET`, and optionally `META_GRAPH_VERSION` (defaults to `v27.0`).
 
 Keep the encryption key stable. Losing it makes stored social tokens unreadable. Never place provider secrets or database credentials in frontend code.
 
@@ -43,14 +43,18 @@ Register these exact callback URLs with the relevant developer apps, replacing t
 - Durable scheduled jobs claimed using PostgreSQL `FOR UPDATE SKIP LOCKED`, retry backoff and per-platform outcomes.
 - YouTube OAuth and resumable video uploads.
 - TikTok Content Posting API Direct Post, creator privacy lookup, chunked upload and publish-status confirmation.
-- Meta OAuth for Facebook Pages and linked Instagram professional accounts; Facebook Page video publishing and Instagram Reels publishing.
+- Meta OAuth for Facebook Pages and linked Instagram professional accounts; Facebook Page video publishing and Instagram Reels publishing. Meta Insights reads Facebook Page and Instagram professional-account reporting when the connected app has the required approved permissions.
+
+Meta Graph API calls use the version pinned by `META_GRAPH_VERSION` so Facebook Login, Page discovery, Instagram Reels, Facebook video and Insights endpoints can be upgraded deliberately as Meta releases new versions. The Meta OAuth request includes `read_insights` and `instagram_manage_insights` for reporting; Meta app review and account eligibility still apply.
 
 ## Platform prerequisites and limitations
 
 - **YouTube:** enable YouTube Data API v3 and configure the OAuth consent screen with the upload/read scopes.
 - **TikTok:** enable the Content Posting API and obtain `video.publish` approval. TikTok documents that unaudited clients are restricted to private visibility.
 - **Instagram/Facebook:** use a Meta app with the required Page and Instagram permissions. Instagram Reels publishing requires an eligible professional account linked to a Facebook Page. Orbit lists the Facebook Pages and linked Instagram professional accounts returned by Meta, and publication requests can target the exact selected account IDs rather than silently choosing the first Page.
-- **Not yet implemented:** LinkedIn, X, Pinterest, Bilibili and the additional regional platforms exposed by the upstream CLI project. Platform analytics ingestion is also not implemented; the dashboard intentionally does not fabricate performance figures.
+- **Creative Studio:** Browser-based video import, trim in/out, 9:16 / 1:1 / 16:9 output presets, fit/fill framing, title overlay, preview, WebM render/export and handoff to the publishing composer. Export support depends on the browser's MediaRecorder implementation; this is an initial editing workflow, not a multi-track nonlinear editor or a replacement for a desktop NLE.
+- **Meta Insights:** Live 28-day daily metric retrieval for connected Facebook Pages and Instagram professional accounts through the Graph API. Results are shown only when Meta returns them; permissions, account eligibility, metric availability and app review can limit access. This is on-demand reporting, not a historical warehouse or a complete cross-platform analytics system.
+- **Not yet implemented:** LinkedIn, X, Pinterest, Bilibili and the additional regional platforms exposed by the upstream CLI project. TikTok and YouTube analytics ingestion is not implemented; the dashboard does not fabricate performance figures.
 
 A platform is shown as connected only after a successful OAuth callback. Real publishing still depends on your own provider app approval, credentials and user authorization.
 
@@ -62,8 +66,13 @@ A platform is shown as connected only after a successful OAuth callback. Real pu
 - `GET /api/accounts`, `DELETE /api/accounts/:id`
 - `POST /api/media` (multipart field: `video`)
 - `POST /api/posts` accepts `accountIds` to target exact connected social accounts (including multiple Facebook Pages and linked Instagram professional accounts); legacy `platforms` targeting remains supported. `GET /api/posts`, `DELETE /api/posts/:id`, `POST /api/posts/:id/retry`
-- `GET /api/activity`, `GET /api/config/status`
+- `GET /api/activity`, `GET /api/config/status`, `GET /api/analytics/meta` (Meta Insights)
 
 ## Upstream projects
 
 The workflow takes inspiration from [dreammis/social-auto-upload](https://github.com/dreammis/social-auto-upload) and [Automated-video-uploader-for-multiple-social-media-platforms](https://github.com/ADITYATALEKAR/Automated-video-uploader-for-multiple-social-media-platforms). This repository is a separate web application, not a wholesale copy of either project.
+
+
+## Verification
+
+GitHub Actions runs `npm test` (server syntax validation) and `npm run build` (production Vite bundle) for pull requests targeting `main`.

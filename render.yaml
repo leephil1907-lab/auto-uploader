@@ -35,3 +35,5 @@ services:
         sync: false
       - key: META_APP_SECRET
         sync: false
+      - key: META_GRAPH_VERSION
+        value: v27.0
