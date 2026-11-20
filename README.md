@@ -66,7 +66,7 @@ A platform is shown as connected only after a successful OAuth callback. Real pu
 - `GET /api/accounts`, `DELETE /api/accounts/:id`
 - `POST /api/media` (multipart field: `video`)
 - `POST /api/posts` accepts `accountIds` to target exact connected social accounts (including multiple Facebook Pages and linked Instagram professional accounts); legacy `platforms` targeting remains supported. `GET /api/posts`, `DELETE /api/posts/:id`, `POST /api/posts/:id/retry`
-- `GET /api/activity`, `GET /api/config/status`
+- `GET /api/activity`, `GET /api/config/status`, `GET /api/analytics/meta` (Meta Insights)
 
 ## Upstream projects
 
