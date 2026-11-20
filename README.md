@@ -71,3 +71,8 @@ A platform is shown as connected only after a successful OAuth callback. Real pu
 ## Upstream projects
 
 The workflow takes inspiration from [dreammis/social-auto-upload](https://github.com/dreammis/social-auto-upload) and [Automated-video-uploader-for-multiple-social-media-platforms](https://github.com/ADITYATALEKAR/Automated-video-uploader-for-multiple-social-media-platforms). This repository is a separate web application, not a wholesale copy of either project.
+
+
+## Verification
+
+GitHub Actions runs `npm test` (server syntax validation) and `npm run build` (production Vite bundle) for pull requests targeting `main`.
