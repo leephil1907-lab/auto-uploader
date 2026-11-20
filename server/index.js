@@ -264,7 +264,7 @@ async function getAccessToken(account){
  return decrypt(account.access_token_enc);
 }
 app.get('/api/analytics/meta',auth,async(req,res,next)=>{try{
- const accounts=(await pool.query("SELECT id,platform,display_name,username,access_token_enc,refresh_token_enc,token_expires_at,metadata FROM social_accounts WHERE user_id=$1 AND platform IN ('facebook','instagram') ORDER BY platform,display_name",[req.user.id])).rows;
+ const accounts=(await pool.query("SELECT id,platform,provider_user_id,display_name,username,access_token_enc,refresh_token_enc,token_expires_at,metadata FROM social_accounts WHERE user_id=$1 AND platform IN ('facebook','instagram') ORDER BY platform,display_name",[req.user.id])).rows;
  const since=Math.floor((Date.now()-27*86400000)/1000),until=Math.floor(Date.now()/1000);
  const results=await Promise.all(accounts.map(async account=>{
   const meta=account.metadata||{},objectId=account.platform==='instagram'?(meta.instagramUserId||account.provider_user_id):(meta.pageId||account.provider_user_id);
