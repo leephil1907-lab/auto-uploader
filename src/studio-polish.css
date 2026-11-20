@@ -199,3 +199,10 @@ button,input,textarea,select{font:inherit}
 .library-thumb{background:linear-gradient(145deg,#1c2735,#141c28)!important;color:#aebbd0}
 .library-thumb .thumb-play{border-color:#526176;background:#182331;color:#aebbd0;backdrop-filter:none}
 .library-thumb>span{background:#0d141dbb;color:#c2ccda}
+
+.platform-picker button{align-items:center;min-width:145px;justify-content:flex-start}
+.platform-account-label{display:grid;gap:2px;text-align:left;min-width:0}
+.platform-account-label b{font-size:10px;font-weight:650}
+.platform-account-label small{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;color:#9ba8b8}
+.platform-picker button.picked .platform-account-label small{color:#c9c1f5}
+@media(max-width:600px){.platform-picker button{min-width:calc(50% - 4px);flex:1}.platform-account-label small{max-width:105px}}
